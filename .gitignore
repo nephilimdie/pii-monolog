@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Composer — this is a library, so consumers resolve their own versions
+/vendor/
+composer.lock
+
+# PHPUnit
+.phpunit.result.cache
+.phpunit.cache/
+/build/
+/coverage/
+
+# Editors
+.idea/
+.vscode/

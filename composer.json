@@ -1,0 +1,30 @@
+{
+  "name": "pii-protect/monolog-handler",
+  "description": "Monolog handler that anonymizes PII in log records via PII Protect engine",
+  "type": "library",
+  "license": "MIT",
+  "keywords": ["monolog", "pii", "privacy", "logging", "anonymization"],
+  "require": {
+    "php": ">=8.1",
+    "monolog/monolog": "^3.0",
+    "guzzlehttp/guzzle": "^7.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^10.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "PiiProtect\\Monolog\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "PiiProtect\\Monolog\\Tests\\": "tests/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit"
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}
