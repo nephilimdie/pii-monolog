@@ -27,6 +27,7 @@ use Monolog\LogRecord;
 class PiiProtectHandler extends AbstractProcessingHandler
 {
     private PiiProtectClient $client;
+    private PiiProtectProcessor $processor;
     private HandlerInterface $inner;
 
     /**
@@ -43,12 +44,17 @@ class PiiProtectHandler extends AbstractProcessingHandler
         string $apiKey,
         ?HandlerInterface $inner = null,
         Level|int $level = Level::Debug,
-        bool $bubble = true,
-        int $timeoutMs = 500,
+        bool $bubble = false,
+        int $timeoutMs = 30000,
     ) {
-        parent::__construct($level, $bubble);
+        if ($bubble) {
+            throw new \InvalidArgumentException('Use a logger-level processor for multiple handlers; bubbling original records is unsafe.');
+        }
+        parent::__construct($level, false);
 
         $this->client = new PiiProtectClient($engineUrl, $apiKey, $timeoutMs);
+        $this->processor = new PiiProtectProcessor($engineUrl, $apiKey, $timeoutMs);
+        $this->processor->setClient($this->client);
         $this->inner  = $inner ?? new StreamHandler('php://stderr', $level);
     }
 
@@ -58,6 +64,7 @@ class PiiProtectHandler extends AbstractProcessingHandler
     public function setClient(PiiProtectClient $client): void
     {
         $this->client = $client;
+        $this->processor->setClient($client);
     }
 
     /**
@@ -68,20 +75,7 @@ class PiiProtectHandler extends AbstractProcessingHandler
      */
     protected function write(LogRecord $record): void
     {
-        $anonymizedMessage = $this->client->anonymize($record->message);
-
-        // Rebuild the record with the sanitized message.
-        // LogRecord is a readonly-ish value object; clone via constructor.
-        $sanitizedRecord = new LogRecord(
-            datetime:  $record->datetime,
-            channel:   $record->channel,
-            level:     $record->level,
-            message:   $anonymizedMessage,
-            context:   $record->context,
-            extra:     $record->extra,
-        );
-
-        $this->inner->handle($sanitizedRecord);
+        $this->inner->handle(($this->processor)($record));
     }
 
     /**

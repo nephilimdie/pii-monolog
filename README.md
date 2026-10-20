@@ -14,6 +14,9 @@ A [Monolog](https://github.com/Seldaek/monolog) handler and processor that anony
 
 ## Installation
 
+Not yet published on Packagist. The command below applies after publication;
+use a Composer path repository for local evaluation until then.
+
 ```bash
 composer require pii-protect/monolog-handler
 ```
@@ -37,8 +40,8 @@ $piiHandler = new PiiProtectHandler(
     apiKey:    env('PII_PROTECT_API_KEY'),
     inner:     $fileHandler,
     level:     Level::Debug,
-    bubble:    true,
-    timeoutMs: 500,   // max time to wait for the engine (fail-safe: uses original text on timeout)
+    bubble:    false,
+    timeoutMs: 30000, // per request; protection errors block the log record
 );
 
 $logger = new Logger('app', [$piiHandler]);
@@ -57,8 +60,8 @@ use PiiProtect\Monolog\PiiProtectProcessor;
 $processor = new PiiProtectProcessor(
     engineUrl: env('PII_PROTECT_ENGINE_URL', 'http://localhost:8000'),
     apiKey:    env('PII_PROTECT_API_KEY'),
-    timeoutMs: 500,
-    skipKeys:  ['password', 'token'],   // never anonymize these context keys
+    timeoutMs: 30000,
+    skipKeys:  ['password', 'token'],   // redact without sending to the engine
 );
 
 $logger = new Logger('app');
@@ -67,13 +70,17 @@ $logger->pushProcessor($processor);
 
 $logger->info('Login attempt', [
     'email'    => 'mario@example.com',   // anonymized
-    'password' => 's3cr3t',              // skipped
+    'password' => 's3cr3t',              // replaced with [REDACTED]
 ]);
 // message:  "Login attempt"  (no PII here)
-// context:  ['email' => '[EMAIL]', 'password' => 's3cr3t']
+// context:  ['email' => '[EMAIL]', 'password' => '[REDACTED]']
 ```
 
-The processor batches all strings in the message + context + extra into a **single** API call per log record, minimizing latency.
+The processor protects message and nested context/extra strings with sequential
+API calls. Objects and resources are redacted. Numeric values, field names and
+the channel name are unchanged: never place PII in those fields. Configure the
+processor before any external handler; another handler running first can leak
+the original record. The wrapper rejects bubbling for this reason.
 
 ---
 
@@ -181,7 +188,7 @@ use PiiProtect\Monolog\PiiProtectClient;
 $client = new PiiProtectClient(
     engineUrl: 'http://localhost:8000',
     apiKey:    'my-key',
-    timeoutMs: 300,
+    timeoutMs: 30000,
 );
 
 $clean = $client->anonymize('Call me at +39 02 1234 5678');
@@ -195,7 +202,12 @@ $results = $client->anonymizeBatch([
 // ['[NAME]', '[EMAIL]', '[FISCAL_CODE]']
 ```
 
-Both methods **never throw**. On any network or API error, the original text is returned so your application keeps running.
+Both methods throw a generic exception on network/API errors, malformed output
+or any response without explicit `safe: true`. They never fall back to original
+text. Batch calls return no partial result when an item fails. Error messages do
+not include upstream response bodies. HTTPS is required except for loopback
+development URLs, and redirects are disabled. These are breaking safety changes;
+do not configure fallback handlers that write the original record on failure.
 
 ---
 

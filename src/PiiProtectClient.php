@@ -5,145 +5,75 @@ declare(strict_types=1);
 namespace PiiProtect\Monolog;
 
 use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\RequestOptions;
+use RuntimeException;
 
-/**
- * Shared HTTP client for the PII Protect engine API.
- *
- * All methods are intentionally non-throwing: on any network or API error
- * the original text is returned so logging never breaks the application.
- */
+/** Validates protection results; errors never include upstream bodies or PII. */
 class PiiProtectClient
 {
     private Client $httpClient;
-    private string $engineUrl;
-    private string $apiKey;
 
-    public function __construct(
-        string $engineUrl,
-        string $apiKey,
-        int $timeoutMs = 500,
-    ) {
-        $this->engineUrl = rtrim($engineUrl, '/');
-        $this->apiKey    = $apiKey;
-
+    public function __construct(string $engineUrl, string $apiKey, int $timeoutMs = 30000)
+    {
+        $url = parse_url($engineUrl);
+        $local = in_array($url['host'] ?? '', ['localhost', '127.0.0.1', '[::1]'], true);
+        if (!is_array($url) || empty($url['host']) || isset($url['user']) || isset($url['pass'])
+            || isset($url['query']) || isset($url['fragment'])
+            || (($url['scheme'] ?? '') !== 'https' && !(($url['scheme'] ?? '') === 'http' && $local))) {
+            throw new \InvalidArgumentException('Use HTTPS, or HTTP on loopback for local development.');
+        }
+        if ($timeoutMs <= 0) {
+            throw new \InvalidArgumentException('Timeout must be positive.');
+        }
         $this->httpClient = new Client([
-            'base_uri'              => $this->engineUrl,
+            'base_uri' => rtrim($engineUrl, '/') . '/',
             RequestOptions::TIMEOUT => $timeoutMs / 1000.0,
+            RequestOptions::ALLOW_REDIRECTS => false,
             RequestOptions::HEADERS => [
-                'X-API-Key'    => $this->apiKey,
+                'X-API-Key' => $apiKey,
                 'Content-Type' => 'application/json',
-                'Accept'       => 'application/json',
+                'Accept' => 'application/json',
             ],
         ]);
     }
 
-    /**
-     * Anonymize a single text string.
-     *
-     * @param  string $text Raw text that may contain PII.
-     * @return string       Anonymized text, or the original text on error.
-     */
     public function anonymize(string $text): string
     {
         if (trim($text) === '') {
             return $text;
         }
-
         try {
-            $response = $this->httpClient->post('/v1/anonymize', [
+            $response = $this->httpClient->post('v1/anonymize', [
                 RequestOptions::JSON => [
-                    'text'         => $text,
-                    'context_id'   => uniqid('monolog_', true),
+                    'text' => $text,
+                    'context_id' => 'monolog_' . bin2hex(random_bytes(16)),
                     'context_type' => 'generic',
                 ],
             ]);
-
             $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-
-            return $body['anonymized_text'] ?? $text;
-        } catch (\Throwable $e) {
-            $this->logError('anonymize', $e);
-            return $text;
+            if ($response->getStatusCode() !== 200 || !is_array($body)
+                || ($body['safe'] ?? null) !== true || !is_string($body['anonymized_text'] ?? null)) {
+                throw new RuntimeException('Invalid protection result.');
+            }
+            return $body['anonymized_text'];
+        } catch (\Throwable) {
+            throw new RuntimeException('PII protection failed; original data was not released.');
         }
     }
 
-    /**
-     * Anonymize multiple texts in a single batch request.
-     *
-     * @param  array<string> $texts Raw texts.
-     * @return array<string>        Anonymized texts in the same order.
-     *                              Falls back to original texts on error.
-     */
+    /** No partial result is returned if any item fails. Keys are preserved. */
     public function anonymizeBatch(array $texts): array
     {
-        if (empty($texts)) {
-            return $texts;
-        }
-
-        // Filter out empty strings but keep track of original indices
-        $indexedTexts = [];
-        foreach ($texts as $idx => $text) {
-            if (trim((string) $text) !== '') {
-                $indexedTexts[$idx] = $text;
+        foreach ($texts as $text) {
+            if (!is_string($text)) {
+                throw new \InvalidArgumentException('Only strings are accepted.');
             }
         }
-
-        if (empty($indexedTexts)) {
-            return $texts;
+        $result = [];
+        foreach ($texts as $key => $text) {
+            $result[$key] = $this->anonymize($text);
         }
-
-        try {
-            $items = [];
-            foreach ($indexedTexts as $idx => $text) {
-                $items[] = ['id' => (string) $idx, 'text' => $text];
-            }
-
-            $response = $this->httpClient->post('/v1/anonymize/batch', [
-                RequestOptions::JSON => [
-                    'items'        => $items,
-                    'context_type' => 'generic',
-                ],
-            ]);
-
-            $body = json_decode((string) $response->getBody(), true, 512, JSON_THROW_ON_ERROR);
-
-            $anonymizedById = [];
-            foreach ($body['items'] ?? [] as $item) {
-                if (isset($item['id'], $item['output']) && $item['error_code'] === null) {
-                    $anonymizedById[$item['id']] = $item['output'];
-                }
-            }
-
-            $result = $texts;
-            foreach ($indexedTexts as $idx => $text) {
-                $id = (string) $idx;
-                if (isset($anonymizedById[$id])) {
-                    $result[$idx] = $anonymizedById[$id];
-                }
-            }
-
-            return $result;
-        } catch (\Throwable $e) {
-            $this->logError('anonymizeBatch', $e);
-            return $texts;
-        }
+        return $result;
     }
 
-    // ------------------------------------------------------------------
-    // Internals
-    // ------------------------------------------------------------------
-
-    private function logError(string $method, \Throwable $e): void
-    {
-        $msg = sprintf(
-            '[PiiProtect] %s() failed: %s (%s:%d)' . PHP_EOL,
-            $method,
-            $e->getMessage(),
-            $e->getFile(),
-            $e->getLine(),
-        );
-        fwrite(STDERR, $msg);
-    }
 }
