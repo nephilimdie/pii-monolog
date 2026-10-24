@@ -8,7 +8,6 @@ use GuzzleHttp\Client;
 use GuzzleHttp\Exception\ConnectException;
 use GuzzleHttp\Handler\MockHandler;
 use GuzzleHttp\HandlerStack;
-use GuzzleHttp\Middleware;
 use GuzzleHttp\Psr7\Request;
 use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\TestCase;
@@ -16,10 +15,9 @@ use PiiProtect\Monolog\PiiProtectClient;
 
 class ClientSafetyTest extends TestCase
 {
-    private function client(array $responses, array &$history = []): PiiProtectClient
+    private function client(MockHandler|array $responses): PiiProtectClient
     {
-        $stack = HandlerStack::create(new MockHandler($responses));
-        $stack->push(Middleware::history($history));
+        $stack = HandlerStack::create($responses instanceof MockHandler ? $responses : new MockHandler($responses));
         $client = new PiiProtectClient('https://engine.test/api', 'key');
         (new \ReflectionProperty($client, 'httpClient'))->setValue($client, new Client([
             'base_uri' => 'https://engine.test/api/', 'handler' => $stack, 'allow_redirects' => false,
@@ -29,10 +27,10 @@ class ClientSafetyTest extends TestCase
 
     public function testValidatedResultAndBasePath(): void
     {
-        $history = [];
-        $client = $this->client([new Response(200, [], '{"safe":true,"anonymized_text":"[PERSON_1]"}')], $history);
+        $mock = new MockHandler([new Response(200, [], '{"safe":true,"anonymized_text":"[PERSON_1]"}')]);
+        $client = $this->client($mock);
         self::assertSame('[PERSON_1]', $client->anonymize('Mario Rossi'));
-        self::assertSame('/api/v1/anonymize', $history[0]['request']->getUri()->getPath());
+        self::assertSame('/api/v1/anonymize', $mock->getLastRequest()?->getUri()->getPath());
     }
 
     public function testRejectsUnsafeMissingMalformedAndErrorResponsesWithoutLeakingData(): void

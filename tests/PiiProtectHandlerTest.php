@@ -57,9 +57,14 @@ class PiiProtectHandlerTest extends TestCase
     {
         $processor = new PiiProtectProcessor('https://engine.test', 'key', skipKeys: ['password']);
         $processor->setClient($this->client());
-        $record = new LogRecord(new \DateTimeImmutable(), 'app', Level::Info, 'alice',
+        $record = new LogRecord(
+            new \DateTimeImmutable(),
+            'app',
+            Level::Info,
+            'alice',
             ['password' => 'secret', 'a.b' => 'literal', 'a' => ['b' => 'nested'], 'count' => 42],
-            ['nested' => ['email' => 'a@b.test'], 'error' => new \RuntimeException('private-value')]);
+            ['nested' => ['email' => 'a@b.test'], 'error' => new \RuntimeException('private-value')]
+        );
         $result = $processor($record);
         self::assertSame('[REDACTED]', $result->context['password']);
         self::assertSame('[LITERAL]', $result->context['a.b']);
